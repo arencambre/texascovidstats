@@ -1,0 +1,1024 @@
+---
+title: "COVID-19 stats for Dallas and Texas"
+params:
+  use_cache: TRUE
+  produced_by: "produced by Aren Cambre"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+---
+
+```{r echo=FALSE, message=FALSE}
+# load needed libraries
+# run the following line once if tweetrmd is not present
+# devtools::install_github("gadenbuie/tweetrmd")
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(googlesheets4)
+library(zoo)
+library(scales)
+library(tweetrmd)
+
+# this is surprisingly useful
+# idea from https://www.r-bloggers.com/2018/07/the-notin-operator/
+`%notin%` <- Negate(`%in%`) 
+```
+
+*This page last updated on `r now()`.*
+
+**Ideas? Errors? [Leave a comment!](#comments)** All code published at [https://github.com/arencambre/texascovidstats].
+
+COVID is real and serious. The best path for stopping COVID-19 is:
+
+- only consider evidence-justified measures
+- prioritize measures that have the most impact
+- encourage voluntary steps at every turn
+- use the lightest regulatory touch possible
+- focus mainly on protecting us from each other
+
+There are two bad paths:
+
+One is mainly denialism, which trivializes COVID-19. Denialists generally oppose any COVID-prevention measure.
+
+The other is creating panic to justify arbitrary authority. This makes things worse: We shift scarce resources and finite human attention away from things that work, and we implement more costly measures than needed to assure reasonable safety. Also, people stop believing in COVID-prevention when they see how much the panciked cried wolf.
+
+```{r get data and process it, include=FALSE, echo=FALSE}
+# first do state data
+# fatality data
+download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID19DailyCountyFatalityCountData.xlsx",
+              "data/TexasCOVID19DailyCountyFatalityCountData.xlsx",
+              mode = "wb")
+
+fatality_data <- read_excel("data/TexasCOVID19DailyCountyFatalityCountData.xlsx",
+                            range = cellranger::cell_rows(3:258))
+
+# case data
+download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID19DailyCountyCaseCountData.xlsx",
+              "data/TexasCOVID19DailyCountyCaseCountData.xlsx",
+              mode = "wb")
+
+case_data <- read_excel("data/TexasCOVID19DailyCountyCaseCountData.xlsx",
+                            range = cellranger::cell_rows(3:257))
+
+# test data
+# IMPORTANT: A large percent of tests are not assigned to any county. They are
+# "pending assignment".
+
+# this has everything through Sept. 12
+download.file("https://dshs.texas.gov/coronavirus/TexasCOVID-19CumulativeTestsOverTimebyCounty.xlsx",
+              "data/TexasCOVID-19CumulativeTestsOverTimebyCounty.xlsx",
+              mode = "wb")
+
+# this has tests starting Sept. 13
+download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID-19CumulativeTestsbyCounty.xlsx",
+              "data/TexasCOVID-19CumulativeTestsbyCounty.xlsx",
+              mode = "wb")
+
+test_data_through_sept12 <- read_excel("data/TexasCOVID-19CumulativeTestsOverTimebyCounty.xlsx",
+                            range = cellranger::cell_rows(2:258))
+
+test_data_starting_sept13 <- read_excel("data/TexasCOVID-19CumulativeTestsbyCounty.xlsx",
+                            range = cellranger::cell_rows(2:258))
+
+# hospitalization data
+download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+              "data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+              mode = "wb")
+
+# Starting December 2, DSHS duplicated the last day's columns
+# into four columns, suffixing the column name with .x, .y, .x.x, and .yy.
+# The following two functions clean this up.
+
+# This anticipates a vector of characters where each string may end
+# with .x. It simply removes the .x from the end of the strings.
+renameSelectedColumns <- function(vectorOfNames) {
+  vectorOfNames %>% str_replace_all("(.*)\\.x", "\\1")
+}
+
+# Remove redundant columns from hospital data.
+removeRedundantColumns <- function(tibbleToFix) {
+  tibbleToFix %>%
+    select(-ends_with(c(".y", ".x.x", ".yy"))) %>%
+    rename_with(renameSelectedColumns, ends_with(".x"))
+}
+
+
+all_covid_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+                            range = cellranger::cell_rows(3:25),
+                            sheet = "COVID-19 Hospitalizations") %>%
+  removeRedundantColumns()
+
+icu_covid_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+                            range = cellranger::cell_rows(3:25),
+                            sheet = "COVID-19 ICU") %>%
+  removeRedundantColumns()
+
+all_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+                            range = cellranger::cell_rows(3:25),
+                            sheet = "Total Occupied Beds") %>%
+  removeRedundantColumns()
+
+icu_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+                            range = cellranger::cell_rows(3:25),
+                            sheet = "ICU Beds Occupied") %>%
+  removeRedundantColumns()
+
+hospital_capacity_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+                            range = cellranger::cell_rows(3:25),
+                            sheet = "Total Hospital Capacity") %>%
+  removeRedundantColumns()
+
+# data derived from https://txcip.org/tac/census/hospitals.php?FIPS=48113
+hospital_data <- read_excel("data/Hospitals by county.xlsx") %>%
+  # replace n/a with 0
+  mutate(`Acute Beds` = ifelse(`Acute Beds` == "n/a", 0, `Acute Beds`),
+         `Acute Beds` = as.numeric(`Acute Beds`),
+         `Psychiatric Beds` = ifelse(`Psychiatric Beds` == "n/a", 0, `Psychiatric Beds`),
+         `Psychiatric Beds` = as.numeric(`Psychiatric Beds`),
+         # the original data has acute beds and psychiatric beds reversed
+         # the next three lines fix that
+         a = `Psychiatric Beds`,
+         `Psychiatric Beds` = `Acute Beds`,
+         `Acute Beds` = a) %>%
+  select(-a)
+
+# remove cruft from column names of certain tibbles
+names(case_data) <- str_remove(names(case_data), "Cases[ \\n\\r]+0")
+names(fatality_data) <- str_remove(names(fatality_data), "Fatalities ")
+names(test_data_through_sept12) <- str_remove(names(test_data_through_sept12), "Tests Through ")
+names(test_data_starting_sept13) <- if_else(str_detect(names(test_data_starting_sept13), "^[:alpha:]+$"),
+                                            names(test_data_starting_sept13),
+                                            as.Date(as.numeric(names(test_data_starting_sept13)), origin = "1899-12-30") %>%
+                                              format("%B %e"))
+
+# linearize the data and get the daily counts
+fatality_data_long <- fatality_data %>%
+  rename(county = `County Name`) %>%
+  pivot_longer(where(is.numeric),
+               names_to = "date") %>%
+  group_by(county) %>%
+  mutate(date = paste0(date, "-2020"),
+         date = mdy(date),
+         count = value - lag(value),
+         week = epiweek(date)) %>%
+  ungroup() %>%
+  drop_na()
+
+case_data_long <- case_data %>%
+  pivot_longer(contains("-"),
+               names_to = "date") %>%
+  rename(county = `County Name`) %>%
+  group_by(county) %>%
+  mutate(`cases` = value - lag(value),
+         date = mdy(paste0(date,"-2020")),
+         week = epiweek(date)) %>%
+  rename(`cumulative cases` = value) %>%
+  drop_na() %>%
+  ungroup() %>%
+  pivot_longer(c(`cumulative cases`, cases),
+               names_to = "type")
+
+# for test data, first need to combine both datasets
+test_data <- bind_cols(test_data_through_sept12,
+                       test_data_starting_sept13 %>% select(-1)) # first column just duplicates other dataframe
+
+test_data_long <- test_data %>%
+  rename(county = County) %>%
+  select(-`May 5*`, -`May 23`, -`June 10`) %>% # no tests on these dates for some reason
+  pivot_longer(contains(" "), names_to = "date") %>%
+  group_by(county) %>%
+  mutate(`tests` = value - lag(value),
+         date = as_date(date, format = "%B %d"),
+         week = epiweek(date)) %>%
+  rename(`cumulative tests` = value) %>%
+  drop_na() %>%
+  ungroup() %>%
+   pivot_longer(c(`cumulative tests`, tests),
+               names_to = "type")
+
+longify_hospitalization_data <- function(raw_data) {
+  raw_data %>%
+  mutate(across(where(is.character) & contains("-"), as.numeric)) %>%
+  pivot_longer(contains("-"),
+               names_to = "date") %>%
+  group_by(`TSA AREA`) %>%
+  mutate(date = ymd(date),
+         week = epiweek(date),
+         week = factor(week),
+         change_over_prior_day = value - lag(value),
+         percent_change_over_prior_day = change_over_prior_day / lag(value)) %>%
+  ungroup()
+}
+
+
+all_hospitalization_data_long <- longify_hospitalization_data(all_hospitalization_data)
+icu_hospitalization_data_long <- longify_hospitalization_data(icu_hospitalization_data)
+all_covid_hospitalization_data_long <- longify_hospitalization_data(all_covid_hospitalization_data)
+icu_covid_hospitalization_data_long <- longify_hospitalization_data(icu_covid_hospitalization_data)
+hospital_capacity_data_long <- hospital_capacity_data %>%
+  mutate(across(where(is.character), ~na_if(., "--"))) %>%
+  mutate(across(contains("-"), as.double)) %>%
+  pivot_longer(contains("-"),
+               names_to = "date") %>%
+  group_by(`TSA AREA`) %>%
+  mutate(date = ymd(date),
+         week = epiweek(date),
+         week = factor(week)) %>%
+  ungroup()
+
+
+
+comprehensive_hospitalization_data_long <- bind_rows(all_covid_hospitalization_data_long %>%
+                                                mutate(type = "all COVID-19 hospitalizations"),
+                                              icu_covid_hospitalization_data_long %>%
+                                                mutate(type = "COVID-19 ICU hospitalizations"),
+                                              all_hospitalization_data_long %>%
+                                                mutate(type = "all hospitalizations"),
+                                              icu_hospitalization_data_long %>%
+                                                mutate(type = "ICU hospitalizations"),
+                                              hospital_capacity_data_long %>%
+                                                mutate(type = "total beds"))
+
+# now get Dallas data
+gs4_deauth() # not clear why this is needed
+dallas_data_raw <- read_sheet("https://docs.google.com/spreadsheets/d/1MfXUN0l_LAG13o_NNWSEsznmhE5VQ1c7Ga2_vcIN7D8/edit?usp=sharing")
+
+
+# recalculate all interpreted data
+dallas_data <- dallas_data_raw %>%
+  mutate(`Beds Occupied %` = `Beds Occupied` / `Total Beds`,
+         `ICU Beds Occupied %` = `ICU Beds Occupied` / `Total ICU Beds`,
+         `ICU Beds Occupied; 7-Day Average` = rollmean(`ICU Beds Occupied`, k = 7, fill = NA, align = "left"),
+         `Ventilators in Use %` = `Ventilators in Use` / `Total Ventilators`) %>%
+  pivot_longer(`Total Beds`:`Ventilators in Use %`)
+
+# this should be used by charts showing weekly trends to exclude the
+# current, incomplete week
+current_week_number = epiweek(today())
+
+endOfPriorWeek <- function() {
+  days <- c(-1:-7)
+  priorDays = tibble(priorDates = today() + days,
+                     dayOfWeek = wday(priorDates))
+  priorSaturday = priorDays %>%
+    filter(dayOfWeek == 7) %>%
+    pull(priorDates)
+  
+  return(format(priorSaturday, "%m-%d-%Y"))
+}
+
+end_of_prior_week = endOfPriorWeek()
+
+```
+
+## What does "week" mean?
+
+Some plots use a week number. This is the epidemiological week, as [defined](https://wwwn.cdc.gov/nndss/document/MMWR_week_overview.pdf) by the CDC. This page was generated on `r today()`, which is day `r wday(today())` of epidemiological week `r epiweek(today())`.
+
+## Hospital utilization for various areas
+
+Hospitalizations are generally the most accurate way of characterizing COVID spread. Presumably, each patient admitted for COVID is due to actual symptoms, as assessed by a doctor. While case counts (testing) and fatalities can provide supplemental guidance, confounding factors blunt their usefulness and accuracy.
+
+Before I go into more detail, here's a plot for the whole state:
+
+```{r Texas COVID-19-related hospitalizations, fig.width=9, echo=FALSE}
+
+# this assures the data shows in the right z-order on the plot
+comprehensive_hospitalization_data_long$type <- factor(comprehensive_hospitalization_data_long$type,
+                     levels = c("total beds",
+                                "all hospitalizations",
+                                "all COVID-19 hospitalizations",
+                                "ICU hospitalizations",
+                                "COVID-19 ICU hospitalizations"))
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations") %>%
+  # the next line would cause the plot to only show total hospitalizations
+  # filter(type == "all hospitalizations") %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  # total bed count from https://www.ahd.com/states/hospital_TX.html
+  # geom_line(y=58242,
+  #           color = "red",
+  #           size = 1.5) +
+  # annotate("text",
+  #          x = mdy("4-15-2020"),
+  #          y = 56000,
+  #          label = "total count of hospital beds",
+  #          hjust = "left",
+  #          color = "red") +
+  labs(title = "Texas's hospitalizations during the COVID-19 pandemic",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count") +
+  coord_cartesian(ylim = c(0, 70000))
+```
+
+Texas as a whole has never come close to exceeding its total hospital bed count. That said, there are two important things to consider when digesting that statement:
+
+-   Some areas have had medical systems overwhelmed. Notable examples are South Texas (summer 2020) and El Paso (fall 2020). Also, some hospitals in otherwise sound areas can get overwhelmed, such as smaller hospitals in outlying urban areas. Outside of such temporal situations, COVID hospitalizations occupy only a modest fraction of beds.
+
+-   Not all beds are appropriate for treating COVID patients. That said, hospitals have much more flexibility in adapting spaces than what is commonly understood.
+
+Impacts of major shifts in COVID-19-related rules or of mass events should be clearly apparent by 12 days after the event. Many events were widely feared to cause COVID surges, but the data does not substantiate that. These include the BLM demonstrations and certain national holidays. Thanksgiving might be different, with its much higher emphasis on indoor activities.
+
+Texas's COVID-19 hospitalization counts are simply *any* hospitalization where the patient tests positive for COVID-19. Texas does not differentiate if the hospitalization is *due to* COVID or incidental, such as an asymptomatic COVID patent who is hospitalized for a knee operation.
+
+Some states do differentiate this. North Dakota's stats suggest the vast majority of COVID-19 hospitalizations are *due to* COVID-19.
+
+Even for the COVID-incidental hospitalizations, the fact that the patent is COVID-positive still means a host of protective measures must be taken, which competes with "due to COVID" patients for resources, like enhanced PPE, negative-pressure ventilation, etc.
+
+My selection of areas is arbitrary, based on my interest. This section is currently a mishmash.
+
+"TSA" below refers to Texas's Trauma Service Areas ([more info](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm)). TSAs are the finest granularity I have on hospitalization data.
+
+```{r Texas COVID-19-related hospitalizations TSA regions T V, fig.width=9, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` %in% c('T.', 'V.'),
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  labs(title = "South Texas's border-area hospitalizations during the COVID-19 pandemic (TSA regions T and V)",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count")
+```
+
+```{r Texas COVID-19-related hospitalizations TSA region I, fig.width=9, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` == 'I.',
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  # the next line would cause the plot to only show total hospitalizations
+  # filter(type == "all hospitalizations") %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  labs(title = "El Paso-area hospitalizations during the COVID-19 pandemic (TSA region I)",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count")
+```
+
+```{r Texas COVID-19-related hospitalizations TSA region J, fig.width=9, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` == 'J.',
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  # the next line would cause the plot to only show total hospitalizations
+  # filter(type == "all hospitalizations") %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  labs(title = "Midland/Odessa-area hospitalizations during the COVID-19 pandemic (TSA region J)",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count") +
+    coord_cartesian(ylim = c(0, 1800))
+```
+
+```{r Texas COVID-19-related hospitalizations TSA region E, fig.width=9, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` == 'E.',
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  labs(title = "DFW-area hospitalizations during the COVID-19 pandemic (TSA region E)",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count") +
+    coord_cartesian(ylim = c(0, 18000))
+```
+
+```{r Texas COVID-19-related hospitalizations TSA region G, fig.width=9, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` == 'G.',
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  labs(title = "Tyler-area hospitalizations during the COVID-19 pandemic (TSA region G)",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count")
+```
+
+The next plots just show COVID-related hospitalizations. Lacking important context, they can be used to cause panic.
+
+```{r Tyler/Longview TSA region COVID-19-related hospitalizations by day, echo=FALSE}
+comprehensive_hospitalization_data_long %>%
+  filter(`TSA AREA` == "Longview/Tyler",
+         type == "all COVID-19 hospitalizations") %>%
+  ggplot(aes(x = date, y = value)) +
+  geom_area() +
+#  geom_line(aes(y=rollmean(value, 5, na.pad = TRUE, align = "right")), color = "red", size = 3) +
+  labs(title = "Longview/Tyler TSA region COVID-19-related hospitalizations, by day",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("daily hospitalization count") +
+  theme_light()
+```
+
+```{r Dallas/Fort Worth TSA region COVID-19-related hospitalizations by day, echo=FALSE}
+comprehensive_hospitalization_data_long %>%
+  filter(`TSA AREA` == "Dallas/Ft. Worth",
+         type == "all COVID-19 hospitalizations") %>%
+  ggplot(aes(x = date, y = value)) +
+  geom_area() +
+#  geom_line(aes(y=rollmean(value, 5, na.pad = TRUE, align = "right")), color = "red", size = 3) +
+  labs(title = "Dallas/Fort Worth TSA region COVID-19-related hospitalizations, by day",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("daily hospitalization count") +
+  theme_light()
+```
+
+This is the same data as prior, but bucketed into epidemiological weeks.
+
+```{r Dallas/Fort Worth TSA region COVID-19-related hospitalizations by CDC week, echo=FALSE}
+comprehensive_hospitalization_data_long %>%
+  filter(week != current_week_number,
+         type == "all COVID-19 hospitalizations") %>%
+  group_by(`TSA AREA`,
+           week) %>%
+  summarize(weekly_hospitalization_count = mean(value),
+            .groups = "drop") %>%
+  filter(`TSA AREA` == "Dallas/Ft. Worth") %>%
+  ggplot(aes(x = week, y = weekly_hospitalization_count)) +
+  geom_col() +
+  labs(title = "DFW TSA region COVID-19 hospitalizations, by CDC week",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("CDC week") +
+  ylab("hospitalization count")
+
+```
+
+
+This shows day-to-day percent changes in hospitalizations. When the red line is below 0, COVID-related hospitalizations are declining. That is where we want to be.
+
+```{r Rate of hospitalization change in the Dallas/Forth Worth TSA region, message=FALSE, warning=FALSE, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(`TSA AREA` == "Dallas/Ft. Worth",
+         type == "all COVID-19 hospitalizations") %>%
+  ggplot(aes(x = date, y = percent_change_over_prior_day * 100)) +
+  geom_area() +
+  geom_line(aes(y=rollmean(percent_change_over_prior_day * 100, 7, na.pad = TRUE, align = "right")), color = "red", size = 3) +
+  labs(title = "% change in DFW TSA region COVID-19-related hospitalizations",
+       subtitle = params$produced_by,
+       caption = "red line is 7-day rolling average; data from Texas DSHS") +
+  xlab("date") +
+  ylab("% change, day over day") +
+  theme_light()
+
+```
+Here's the percent of all available hospital beds that have COVID-positive patients. Per Governor Abbott's executive order [EA-32](https://www.dshs.texas.gov/ga32/), if this exceeds 15% for seven days in a row, that tightens up COVID-prevention measures.
+
+Important: the denominator is the number of beds available. Even if cases are rising, the percent can be driven down simply by adding to total bed capacity.
+```{r percent of beds occupied by COVID patients, message=FALSE, warning=FALSE, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` == 'E.',
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  select(date, type, value) %>%
+  pivot_wider(names_from = type) %>%
+  mutate(percent_beds_covid = `all COVID-19 hospitalizations`/`total beds`) %>%
+  ggplot(aes(x = date, y = percent_beds_covid*100)) +
+  geom_area() +
+  geom_area(mapping = aes(y = ifelse(percent_beds_covid*100>15, percent_beds_covid*100, 0)), fill = "red") +
+  geom_hline(yintercept=15, color = "red") +
+  labs(title = "DFW-area % hospital-bed use by COVID-positive people (TSA region E)",
+       subtitle = params$produced_by,
+       caption = "red line is 15%; data from Texas DSHS") +
+  xlab("date") +
+  ylab("percent")
+
+```
+
+Here's the most recent 20 days of the data, conveyed a bit differently. 
+```{r percent of beds occupied by COVID patients 20 most recent days, message=FALSE, warning=FALSE, echo=FALSE}
+
+comprehensive_hospitalization_data_long %>%
+  filter(
+    type != "ICU hospitalizations",
+    `TSA ID` == 'E.',
+    date != mdy("08-08-2020"),
+    date != mdy("08-16-2020")
+  ) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type ==
+             "all hospitalizations" & (
+               date == ymd("2020-07-23") |
+                 date == ymd("2020-07-26")
+             ))) %>%
+  select(date, type, value) %>%
+  pivot_wider(names_from = type) %>%
+  mutate(percent_beds_covid = `all COVID-19 hospitalizations` / `total beds`) %>%
+  slice_tail(n = 20) %>%
+  ggplot(aes(x = date, y = percent_beds_covid * 100)) +
+  geom_col() +
+  geom_col(mapping = aes(y = ifelse(
+    percent_beds_covid * 100 > 15,
+    percent_beds_covid * 100, 0
+  )), fill = "red") +
+  geom_hline(yintercept = 15, color = "red") +
+  geom_text(
+    aes(label = date),
+    y = .5,
+    angle = 90,
+    hjust = "left",
+    vjust = "center",
+    color = "white",
+    fontface = "bold"
+  ) +
+  geom_text(
+    aes(label=paste0(round(percent_beds_covid * 100, 1), "%")),
+    angle = 90,
+    hjust = "right",
+    nudge_y = -.5,
+    color = "white",
+    fontface = "bold"
+   ) +
+  labs(title = "DFW-area % hospital-bed use by COVID-positive people (TSA region E)",
+       subtitle = params$produced_by,
+       caption = "red line is 15%; data from Texas DSHS") +
+  xlab("date") +
+  ylab("percent")
+
+```
+
+## Fatalities by week for Dallas County
+
+Fatalities are an appealing stat because it's hard to fake a death. The accuracy is illusory, however. Deaths are declining even though hospitalizations and cases are rising. That is probably because [treatments are improving, hospitals are (were?) less taxed, and other reasons](https://www.nature.com/articles/d41586-020-03132-4).
+
+That is to be celebrated. However, it does not justify dropping spread-prevention measures. That would overwhelm the medical system, which in turn would cause fatality surges. In other words, a lowered fatality rate depends on a not-overwhelemd medical system.
+
+A note: The most recent fatality counts will always be too low. It takes time for cases to be added to this data. Creating a death certificate and getting that report to the DSHS takes a variable amount of time.
+
+```{r Dallas County COVID-19 fatalities by week, echo=FALSE}
+fatality_data_long %>%
+  group_by(county,
+           week) %>%
+  mutate(weekly_report_count = n()) %>%
+  filter(weekly_report_count == 7) %>%
+  summarize(weekly_count = sum(count),
+            .groups = "drop") %>%
+  filter(county == "DALLAS") %>%
+  ggplot(aes(x = week, y = weekly_count)) +
+  geom_col() +
+#  geom_smooth() +
+  labs(title = "Dallas County COVID-19 fatalities by week",
+       subtitle = params$produced_by,
+       caption = paste0("Data from Texas DSHS. Week ", current_week_number - 1, " ends ", end_of_prior_week, ".")) +
+  xlab("CDC week") +
+  ylab("fatality count")
+
+```
+
+```{r Dallas County COVID-19 fatalities, message=FALSE, echo=FALSE}
+fatality_data_long %>%
+  filter(county == "DALLAS") %>%
+  ggplot(aes(x = date, y = count)) +
+  geom_area() +
+  geom_smooth() +
+  labs(title = "Dallas County COVID-19 fatalities, by day",
+       subtitle = params$produced_by,
+       caption = paste0("Data from Texas DSHS.")) +
+  xlab("day") +
+  ylab("fatality count")
+
+```
+
+## Positive COVID-19 tests by week for various jurisdictions
+
+While testing is cited a lot, it has limitations in its usefulness. Because test stats roughly correspond with hospitalization trends, they might be accurate on a gross level, but that's it. Things you should be aware of:
+
+-   Testing rates are affected by factors poorly related to spread. They may include test availability, test locations, total test count, evolving perceptions of when to get tested, test-eligibility changes (this mainly happened early on), testing surges before nationwide social events (e.g., Thanksgiving), community outreach, and more.
+
+-   Some factors might encourage communities with substantially different rates of infection to get tested. For example, early on, uncertainty with the cost of testing may bias testing to communities with more wealth, which could include a higher percent of people who travel, which could include people who came to or from notorious viral hot spots, like NYC early on. Also, in Dallas County, there have been testing-promotion outreaches to specific communities.
+
+Also, all this data is of PCR tests (the slow tests). It does not show antigen tests (the fast tests).
+
+Sometimes you'll read about much higher test counts than that is indicated below. That happens when PCR and antigen tests are combined into one number. This inflates numbers with double-counting. Why? The antigen test is fast but less accurate. The CDC and others still recommend re-confirming positive antigen tests with slower but accurate PCR tests.
+
+Let's suppose someone gets both an antigen and PCR test today, and gets a positive on both. The antigen test's results will likely show in today's or tomorrow's case numbers. Then in a few days, that person's PCR test result will come back and *again* show in the numbers. That is, one person's case will show in two days' counts. That is double-counting that can be avoided by only using PCR test results.
+
+Dallas County Judge Clay Jenkins uses the inflated, double-counted test numbers. Here's an example tweet from November 25, 2020, where he inflates the case count by 13%:
+
+`r tweet_embed("https://twitter.com/JudgeClayJ/status/1331692262833664000")`
+
+```{r Texas statewide COVID-19 testing, by day, echo=FALSE}
+
+aggregated_case_data <- case_data_long %>%
+  bind_rows(test_data_long) %>%
+  filter(!str_detect(type, "cumulative")) %>%
+  group_by(date, type) %>%
+  summarize(statewide_count = sum(value),
+            .groups = "drop") %>%
+  pivot_wider(names_from = type,
+              values_from = statewide_count) %>%
+  drop_na() %>%
+  mutate(`negative tests` = tests - cases,
+         `positive rate` = cases / tests) %>%
+  pivot_longer(cols = c(`negative tests`, cases, tests, `positive rate`),
+              names_to = "type",
+              values_to = "value") %>%
+  mutate(day_of_week = wday(date),
+         weekend = ifelse(day_of_week %in% c(1,7), TRUE, FALSE),
+         `Day of week` = ifelse(day_of_week == 2, "Monday", "not Monday"),
+         type = factor(type, levels=c("negative tests", "cases", "positive rate", "tests"))) %>%
+  # tests are zero for 2020-11-15 and anomalousl for 2020-11-11,
+  # so both dates need to be removed
+  filter(date != "2020-11-15",
+         date != "2020-11-11")
+
+aggregated_case_data %>%
+  filter(type %in% c("cases", "negative tests")) %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area() +
+#  geom_smooth() +
+  labs(title = "Texas statewide COVID-19 testing, by day",
+       subtitle = params$produced_by,
+       caption = "data from https://www.dshs.state.tx.us/coronavirus/additionaldata/") +
+  xlab("date") +
+  ylab("count") +
+  coord_cartesian(ylim = c(0, 250000))
+
+```
+
+The next plot has to use poor data to calculate percent positivity.
+
+Percent positivity is simply a day's positive results (numerator) divided by all tests administered (denominator). The problem is DSHS gives bad data: the number it reports for a given day's case (positive) count is all positive tests *reported* that day, not the positive results of tests administered on that day.
+
+Example: You took a COVID test on July 5, and your positive result came back on July 10. DSHS should add that positive to the July 5 case counts. Instead, it adds your case to the July 10 counts.
+
+A rolling average help some. The bars in this plot represent the imperfect data, and the red line is the rolling average.
+
+```{r Texas pct of positive COVID-19 tests, message=FALSE, warning=FALSE, echo=FALSE}
+aggregated_case_data %>%
+  filter(type == "positive rate") %>%
+  mutate(value = round(value*100)) %>%
+  ggplot(aes(x = date, y = value, fill = value)) +
+  geom_col() +
+  scale_fill_gradient(low="darkgreen",
+                       high="red") +
+  geom_line(aes(y=rollmean(value, 7, na.pad = TRUE, align = "right")), color = "red", size = 2) +
+  labs(title = "Texas's % of positive COVID-19 tests, by day",
+       subtitle = params$produced_by,
+       caption = "trend line based on 7 day rolling averages; data from Texas DSHS") +
+  coord_cartesian(ylim = c(0, 30)) +
+  xlab("date") +
+  ylab("percent of positive tests")
+```
+
+```{r Dallas County COVID-19 tests and cases, warning=FALSE, echo=FALSE}
+case_data_long %>%
+  bind_rows(test_data_long) %>%
+  filter(type %in% c("cases", "tests")) %>%
+  mutate(type = factor(type, levels=c("tests", "cases"))) %>%
+  filter(county == "Dallas") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position="dodge") +
+  geom_line(aes(y=rollmean(value, 7, na.pad = TRUE, align = "right")), color = "darkgreen", size = 1) +
+  labs(title = "Dallas County COVID-19 tests and cases, by day",
+       subtitle = params$produced_by,
+       caption = "trend line based on 7 day rolling averages; data from Texas DSHS") +
+  xlab("date") +
+  ylab("count") +
+  coord_cartesian(ylim = c(0, 15000))
+
+```
+
+This is the same data as above, but just cases (positive test results):
+
+```{r Dallas County COVID-19 cases, warning=FALSE, echo=FALSE}
+case_data_long %>%
+  filter(type %in% c("cases")) %>%
+  filter(county == "Dallas") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area() +
+  geom_line(aes(y=rollmean(value, 7, na.pad = TRUE, align = "right")), color = "darkgreen", size = 1) +
+  labs(title = "Dallas County COVID-19 case count, by day",
+       subtitle = params$produced_by,
+       caption = "trend line based on 7 day rolling averages; data from Texas DSHS") +
+  xlab("date") +
+  ylab("count") +
+  coord_cartesian(ylim = c(0, 1900)) +
+  theme(legend.position = "none")
+```
+
+```{r Dallas County positivity, warning=FALSE, echo=FALSE}
+dallas_county_positivity <- case_data_long %>%
+  filter(county == "Dallas") %>%
+  bind_rows(test_data_long) %>%
+  pivot_wider(names_from = type) %>%
+  select(-county, -week, -`cumulative cases`, -`cumulative tests`) %>%
+  drop_na() %>%
+  mutate(positive_rate = cases/tests * 100) %>%
+  filter(!(as.character(date) %in% c("2020-05-01", "2020-05-03"))) %>%
+  mutate(rolling_average_tests_lag_1 = rollapply(lag(tests, n = 1),
+                                               width = 5,
+                                               FUN = mean,
+                                               align = "right",
+                                               fill = NA,
+                                               na.rm = TRUE),
+         rolling_average_tests = rollapply(lag(tests),
+                                               width = 7,
+                                               FUN = mean,
+                                               align = "right",
+                                               fill = NA,
+                                               na.rm = TRUE),
+         rolling_average_cases = rollapply(lag(cases),
+                                               width = 7,
+                                               FUN = mean,
+                                               align = "right",
+                                               fill = NA,
+                                               na.rm = TRUE),
+         rolling_average_cases_lag_3 = (lag(rolling_average_cases, n = 3)),
+         rolling_average_tests_lag_3 = (lag(rolling_average_tests, n = 3)),
+         prior_five_over_today_positivity = rolling_average_tests_lag_1/tests,
+         rolling_average_positivity = rolling_average_cases/rolling_average_tests,
+         rolling_average_positivity_lagged_cases = rolling_average_cases_lag_3/rolling_average_tests,
+         rolling_average_positivity_lagged_tests = rolling_average_cases/rolling_average_tests_lag_3) %>%
+  # remove a small number of days with absurd values here
+  filter(positive_rate < 100,
+         positive_rate >= 0)
+
+dallas_county_positivity %>%
+  ggplot(aes(x = date, y = rolling_average_positivity, fill = rolling_average_positivity)) +
+  geom_col() +
+  scale_fill_gradient(low="darkgreen",
+                       high="red") +
+  labs(title = "Dallas County's % of positive COVID-19 tests",
+       subtitle = params$produced_by,
+       caption = "percent based on 7 day rolling averages; data from Texas DSHS") +
+  xlab("date") +
+  ylab("percent of positive tests") +
+  scale_y_continuous(labels = scales::percent) +
+  coord_cartesian(ylim = c(0, .3)) +
+  theme(legend.position = "none")
+```
+
+At one time, I was curious if test rates were driving percent positivity. A simple linear regression suggests expanded testing correlates to a declining positivity ratio. (That is the opposite of baseless allegions on certain right-wing media.)
+
+However, don't get excited. Enjoy the pretty graph, then wait for the disappointing reveal after it.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+
+dallas_county_positivity %>%
+  ggplot(aes(x = rolling_average_tests, y = rolling_average_positivity * 100, color = date)) +
+  geom_point() +
+  geom_smooth(method=lm, se = FALSE) +
+  xlab("daily tests (rolling average)") +
+  ylab("daily percent positivity (rolling average)") +
+  labs(title = "Are test counts influencing positivity in Dallas County?",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS")
+```
+
+The linear regression that produced that line is nowhere near conclusive. The model's R^2^ value is low, so the vast majority of variance in percent positivity is *not* explained by testing levels. This is certainly an underspecified model--meaning we need more independent variables to really speak to the effect of testing on percent positivity.
+
+```{r, echo=FALSE}
+
+fit <- lm(rolling_average_positivity * 100 ~ rolling_average_tests, 
+   dallas_county_positivity)
+
+summary(fit)
+```
+
+Below is where I checked if lagging the cases (positive tests) by three days had any effect on the analysis. Why three days? At the time I constructed this, some data suggested the average response time on PCR tests was three days. (This was an informal review of the data; I think it's far more variable than that.)
+
+What does lag mean?
+
+First, let me explain what I normally do: I use a seven-day rolling average to calculate percent positivity. If today is November 14, then that means I use the average (mean) of all cases and tests from Nov. 8 through Nov. 14 to determine today's case and test count.
+
+If I lag the tests three days, that means I shift back, by three days, the seven-day period that get the average from. For example, if I am taking the average of Nov. 8 -14 for cases (positives), I would take the average of tests from a period shifted back three days, Nov. 5 - 11. This is under the theory that it will take three days for a test's result to emerge--then I am, in theory, improving the quality of my percent positivity statistic.
+
+Visually, lagging the tests had a modest smoothing effect for much of the plot. Other than that, the lines were pretty close.
+
+This could all be solved if DSHS would release good data, where the cases reported for a given date corresponded to tests for that same date.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+dallas_county_positivity %>%
+  select(date, 
+         rolling_average_positivity, 
+         rolling_average_positivity_lagged_tests) %>%
+  pivot_longer(cols = c(rolling_average_positivity, rolling_average_positivity_lagged_tests),
+               names_to = "type",
+               values_to = "count") %>%
+  ggplot(aes(x = date, y = count, color = type)) +
+  geom_line() +
+  xlab("day") +
+  ylab("percent positivity (rolling average)") +
+  labs(title = "Does lagging test counts improve anything?",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS")
+```
+
+## City of Dallas stats
+
+The following stats mostly come directly from the City of Dallas. They are not COVID-specific, so they give a reasonable indicator of broad utilization stats.
+
+```{r Hospitalizations in the City of Dallas ugly chart, echo=FALSE, message=FALSE, warning=FALSE}
+dallas_data %>%
+  filter(name %in% c("Beds Occupied",
+                     "Total Beds")) %>%
+  # filter(!(name %in% c("ICU Beds Occupied %",
+  #                      "Beds Occupied %",
+  #                      "Ventilators in Use %"))) %>%
+  ggplot(aes(x=date, y = value, color = name)) +
+  geom_smooth() +
+  geom_line() +
+  labs(title = "Hospitalizations in the City of Dallas",
+       subtitle = "This includes *all* hospitalizations, not just COVID-19") +
+  expand_limits(y = 0) +
+  mdthemes::md_theme_classic()
+
+```
+
+Months ago, Clay Jenkins shared some selected data in a tweet. I used that to calculate that that Dallas alone has 56% of all the DFW TSA region's COVID-related hospitalizations. I am sure that number varies modestly here and there, but even if it is modestly wrong, it doesn't change the big picture that this plot paints. 
+
+```{r Hospitalizations in the City of Dallas, fig.width=10, echo=FALSE}
+
+bind_rows(dallas_data %>% filter(name %in% c("Total Beds", "Beds Occupied")),
+          comprehensive_hospitalization_data_long %>%
+           filter(`TSA AREA` == "Dallas/Ft. Worth",
+                  type == "all COVID-19 hospitalizations") %>%
+            mutate(name = "COVID-19 Beds Occupied",
+                   value = value * .56) %>%
+           select(date, value, name)) %>%
+  arrange(date) %>%
+  mutate(name = fct_relevel(name,
+                            "Total Beds",
+                            "Beds Occupied",
+                            "COVID-19 Beds Occupied"),
+         name = recode(name,
+                       `Total Beds` = "empty beds",
+                       `Beds Occupied` = "non-COVID hospitalizations",
+                       `COVID-19 Beds Occupied` = "COVID-19 hospitalizations")) %>%
+  ggplot(aes(x=date, y = value, fill = name)) +
+#  geom_smooth() +
+  geom_area(position = 'identity') +
+  labs(title = "Hospitalizations in the City of Dallas",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS and City of Dallas; COVID-19 beds estimated as 56% of TSA E's COVID-19 hospitalizations") +
+  expand_limits(y = 0) +
+  scale_fill_brewer() +
+  mdthemes::md_theme_classic() +
+  theme(legend.title = element_blank())
+
+```
+
+Here's an example of where a possibly distortion conflicts with data. On Nov. 10, the _Dallas Morning News_ [shared](https://www.dallasnews.com/news/public-health/2020/11/10/dallas-county-has-52-icu-hospital-beds-available-as-coronavirus-cases-climb/) that there were only 52 ICU beds available in all of Dallas County and only 229 for the entire DFW TSA region. In fact, Dallas (the city) alone had around 213 unoccupied ICU beds that day, and it's quite possible that hospitals in Dallas County but not in Dallas ([just an example](https://www.ahd.com/free_profile/450079/Baylor_Scott_%26_White_Medical_Center_Irving_/Irving/Texas/)) had additional, open ICU beds.
+
+As of December 1, there is no correction on that article.
+
+```{r ICU hospitalizations in the City of Dallas, echo=FALSE, message=FALSE, warning=FALSE}
+dallas_data %>%
+  filter(name %in% c("ICU Beds Occupied",
+                     "Total ICU Beds")) %>%
+  # filter(!(name %in% c("ICU Beds Occupied %",
+  #                      "Beds Occupied %",
+  #                      "Ventilators in Use %"))) %>%
+  ggplot(aes(x=date, y = value, color = name)) +
+  geom_smooth() +
+  geom_line() +
+  expand_limits(y = 0) +
+  labs(title = "ICU hospitalizations in the City of Dallas",
+       subtitle = "This includes all ICU hospitalizations, not just COVID-19")
+
+```
+
+## CDC information on when we should see effects of mass events or societal changes
+
+Per the CDC, these are important information to interpret the death count's relationship to specific events [(source, accessed on June 14, 2020)](https://www.cdc.gov/coronavirus/2019-ncov/hcp/planning-scenarios.html#table-2):
+
+-   Time from exposure to symptom onset: \~6 days
+
+-   Mean number of days from symptom onset to hospitalization (standard deviation):
+
+    -   0-49 years: 6.9 (5.0) days
+    -   50-64 years: 7.2 (5.3) days
+    -   ≥65 years: 6.2 (5.7) days
+
+-   Mean number of days from symptom onset to death (standard deviation in parenthesis):
+
+    -   0-49 years: 14.9 (7.7) days
+    -   50-64 years: 15.3 (8.1) days
+    -   ≥65 years: 12.9 (7.6) days
+
+-   Mean number of days from death to reporting (standard deviation in parenthesis):
+
+    -   0-49 years: 7.1 (7.7) days
+    -   50-64 years: 7.2 (7.7) days
+    -   ≥65 years: 6.6 (7.3) days
+
+This suggests that for a typical case that will end as a fatality, it will take this long for an exposure to cause a fatality:
+
+-   0-49 years: 20.8 days
+-   50-64 years: 28.5 days
+-   ≥65 years: 25.5 days
+
+This means that some mass event or major societal change should have an unambiguous effect on deaths no later than 29 days from the inflection point. Before that point, you should see a distinct rise in cases as the standard deviation is wide.
+
+## Test delays
+
+Labcorp says that test results are available electronically 2-4 days after the specimen is picked up [(source)](https://www.labcorp.com/tests/139900/2019-novel-coronavirus-covid-19-naa). Assumptions:
+
+-   Specimens are always picked up the same day of the test.
+-   Test results are quickly reported electronically.
+-   Labcorp's time is industry standard.
+
+With all of these assumptions, we may infer no additional delay beyond the 2-4 day window. Therefore, test delays could average to three days.
+
+## Estimate on Dallas hospital utilization
+
+The numbers on hospital utilization come from two sources.
+
+The numbers on total beds and beds occupied come from City of Dallas numbers, as shared by the Dallas mayor in daily emails. These numbers describe **all** hospital utilization, not just COVID-19.
+
+The best numbers for COVID-19-related hospital utilization come from the Texas Department of State Health Services's [Texas COVID-19 Data page](https://www.dshs.state.tx.us/coronavirus/additionaldata/). On that page is a spreadsheet named [COVID-19 Hospitalizations over Time by Trauma Service Area (TSA)](https://www.dshs.state.tx.us/coronavirus/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx), which gives daily COVID-19-related hospitalization counts for [trauma service areas](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm). Unfortunately, that means the finest-grained resolution for Dallas is an eighteen-county region.
+
+On June 15, Dallas County Judge Clay Jenkins posted on Twitter that Dallas County had 400 COVID-19-related hospitalizations: ![Clay Jenkins tweet](Jenkins_tweet.png)
+
+On the same day, Texas reported that Trauma Service Area E, an eighteen-county region which includes Dallas County, had 701 hospitalizations. That means Dallas County had 57% of all the region's COVID-19-related hospitalizations.
+
+However, the Dallas hospital data includes hospitals only within the Dallas city limits. Dallas's borders are not contiguous with Dallas County, so the 57% estimate isn't right.
+
+Texas Association of Counties has key information on counties in its [County Information Program](https://imis.county.org/iMIS/CountyInformationProgram). These are used for hospital stats below.
+
+First, while the vast majority of Dallas's territory is in Dallas County, its city limits extend into Collin, Denton, Kaufman, and Rockwall Counties. A review of those counties' respective pages on the TAC site suggests none have hospitals in Dallas ([Collin](https://txcip.org/tac/census/hospitals.php?FIPS=48085), [Denton](https://txcip.org/tac/census/hospitals.php?FIPS=48121), [Kaufman](https://txcip.org/tac/census/hospitals.php?FIPS=48257), [Rockwall](https://txcip.org/tac/census/hospitals.php?FIPS=48397)). Therefore, it is safe to suspect the Dallas County hospitalizations are a superset of Dallas's hospitalizations.
+
+```{r include=FALSE}
+
+dallasHospitalCount <- count(hospital_data %>% filter(`In Dallas?` == TRUE, Rehab == FALSE))
+
+dallasCountyHospitalCount <-count(hospital_data %>% filter(Rehab == FALSE)) 
+
+dallasBedCount <- sum(hospital_data %>% filter(`In Dallas?` == TRUE, Rehab == FALSE) %>% select(`Acute Beds`))
+
+dallasCountyBedCount <- sum(hospital_data %>% filter(Rehab == FALSE) %>% select(`Acute Beds`))
+
+dallasPercentOfCountyBeds <- ceiling(dallasBedCount / dallasCountyBedCount * 100)
+
+```
+
+Per the TAC's [Hospitals Located in Dallas County page](https://txcip.org/tac/census/hospitals.php?FIPS=48113), when excluding rehabilitation hospitals, Dallas has `r as.numeric(dallasHospitalCount)` of the `r as.numeric(dallasCountyHospitalCount)` hospitals in Dallas County. The Dallas hospitals have `r dallasBedCount` acute beds, which is `r dallasPercentOfCountyBeds`% of Dallas County's `r dallasCountyBedCount` beds.
+
+I will estimate that Dallas has `r dallasPercentOfCountyBeds`% of Dallas County's patients. Since on June 15, Dallas County's 400 hospitalized COVID-19 patients represented 57% of the TSA's COVID-19 patients, Dallas's share is 57% \* `r dallasPercentOfCountyBeds`% = `r ceiling(.57 * .88 * 100)`%.
+
+## Data sources
+
+All data comes from:
+
+-   The Texas Department of State Health Services's [Texas COVID-19 Data](https://www.dshs.state.tx.us/coronavirus/additionaldata/) page.
+-   A dataset of Dallas Mayor data ([link](https://docs.google.com/spreadsheets/d/1MfXUN0l_LAG13o_NNWSEsznmhE5VQ1c7Ga2_vcIN7D8/edit?usp=sharing)). I am on his email list, and the same data is in the mayor's [tweets](https://twitter.com/Johnson4Dallas).
+-   Dallas County hospital bed data is from [data](https://txcip.org/tac/census/hospitals.php?FIPS=48113) compiled by [Texas Association of Counties](https://www.county.org/)'s [County Information Program](https://imis.county.org/iMIS/CountyInformationProgram)
+-   --Total bed count for all Texas hospitals comes from the [American Hospital Directory'](https://www.ahd.com/)s [Individual Hospital Statistics for Texas page](https://www.ahd.com/states/hospital_TX.html).-- I've since shifted this to DSHS's numbers. I used AHD initially because DSHS wasn't sharing this stat.
