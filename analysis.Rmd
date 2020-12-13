@@ -32,7 +32,7 @@ knitr::opts_chunk$set(dev="ragg_png", echo = FALSE)
 
 *This page last updated on `r now()`.*
 
-**Ideas? Errors? [Leave a comment!](#comments)** All code published at [https://github.com/arencambre/texascovidstats].
+**Ideas? Errors? [Leave a comment!](#comments)** All code published at https://github.com/arencambre/texascovidstats.
 
 COVID is real and serious. The best path for stopping COVID-19 is:
 
@@ -345,7 +345,7 @@ Even for the COVID-incidental hospitalizations, the fact that the patent is COVI
 
 My selection of areas is arbitrary, based on my interest. This section is currently a mishmash.
 
-"TSA" below refers to Texas's Trauma Service Areas ([more info](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm)). TSAs are the finest granularity I have on hospitalization data.
+"TSA" below refers to Texas's Trauma Service Areas ([more info](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm)). TSAs are the finest granularity that DSHS publishes on hospitalization data. Below are separate plots specifically about Dallas. Those plots use data collected directly by Dallas, and they paint a different story for ICU beds than the state data.
 
 ```{r Texas COVID-19-related hospitalizations TSA regions T V, fig.width=9}
 
@@ -1008,7 +1008,11 @@ With all of these assumptions, we may infer no additional delay beyond the 2-4 d
 
 The numbers on hospital utilization come from two sources.
 
-The numbers on total beds and beds occupied come from City of Dallas numbers, as shared by the Dallas mayor in daily emails. These numbers describe **all** hospital utilization, not just COVID-19.
+The numbers on total beds and beds occupied come from City of Dallas numbers, as shared by the Dallas mayor in daily emails. **Dallas's numbers describe all hospital utilization, not just COVID-19.**
+
+Dallas collects its data per Dallas Mayor Eric Johnson's [March 30, 2020 emergency order](http://citysecretary2.dallascityhall.com/pdf/meetings/033020_ORD. pdf). Section 5 requires hospitals within the city to submit, each day by 4 PM, "daily reports of the total number of (1) patient beds and patient beds occupied; (2) Intensive Care Unit patient beds and Intensive Care Unit patient beds occupied; and (3) ventilators that are available and ventilators being used by patients."
+
+An interesting finding is that the number of available ICU rooms has been far higher than what some panicked media headlines have suggested. For example, on Nov. 10, a Dallas Morning News headline screamed "[Dallas County has 52 ICU hospital beds available as coronavirus cases climb](https://www.dallasnews.com/news/public-health/2020/11/10/dallas-county-has-52-icu-hospital-beds-available-as-coronavirus-cases-climb/)". In fact, Dallas alone had 213 available rooms. That count doesn't include some hospitals that are in Dallas County but not Dallas. (There are no hospitals in the parts of Dallas outside Dallas County.)
 
 The best numbers for COVID-19-related hospital utilization come from the Texas Department of State Health Services's [Texas COVID-19 Data page](https://www.dshs.state.tx.us/coronavirus/additionaldata/). On that page is a spreadsheet named [COVID-19 Hospitalizations over Time by Trauma Service Area (TSA)](https://www.dshs.state.tx.us/coronavirus/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx), which gives daily COVID-19-related hospitalization counts for [trauma service areas](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm). Unfortunately, that means the finest-grained resolution for Dallas is an eighteen-county region.
 
