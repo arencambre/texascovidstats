@@ -58,6 +58,12 @@ download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID19DailyCountyF
 fatality_data <- read_excel("data/TexasCOVID19DailyCountyFatalityCountData.xlsx",
                             range = cellranger::cell_rows(3:258))
 
+# below problem reported to DSHS on 2020-12-12
+# the columns before and after this are 11-29 and 12-1, so erroneous header
+if (names(fatality_data)[270] == "Fatalities 12-30") {
+  names(fatality_data)[270] = "Fatalities 11-30"
+}
+
 # case data
 download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID19DailyCountyCaseCountData.xlsx",
               "data/TexasCOVID19DailyCountyCaseCountData.xlsx",
