@@ -110,8 +110,7 @@ renameSelectedColumns <- function(vectorOfNames) {
 # Remove redundant columns from hospital data.
 removeRedundantColumns <- function(tibbleToFix) {
   tibbleToFix %>%
-    select(-ends_with(c(".y", ".x.x", ".yy"))) %>%
-    rename_with(renameSelectedColumns, ends_with(".x"))
+    select(-ends_with(c(".y", ".x")))
 }
 
 
