@@ -571,7 +571,7 @@ comprehensive_hospitalization_data_long %>%
   select(date, type, value) %>%
   pivot_wider(names_from = type) %>%
   mutate(percent_beds_covid = `all COVID-19 hospitalizations` / `total beds`) %>%
-  slice_tail(n = 20) %>%
+  slice_tail(n = 30) %>%
   ggplot(aes(x = date, y = percent_beds_covid * 100)) +
   geom_col() +
   geom_col(mapping = aes(y = ifelse(
@@ -586,7 +586,8 @@ comprehensive_hospitalization_data_long %>%
     hjust = "left",
     vjust = "center",
     color = "white",
-    fontface = "bold"
+    fontface = "bold",
+    size = 3
   ) +
   geom_text(
     aes(label=paste0(round(percent_beds_covid * 100, 1), "%")),
@@ -594,7 +595,8 @@ comprehensive_hospitalization_data_long %>%
     hjust = "right",
     nudge_y = -.5,
     color = "white",
-    fontface = "bold"
+    fontface = "bold",
+    size = 3
    ) +
   labs(title = "DFW-area % hospital-bed use by COVID-positive people (TSA region E)",
        subtitle = params$produced_by,
