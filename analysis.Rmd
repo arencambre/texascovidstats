@@ -21,10 +21,6 @@ library(zoo)
 library(scales)
 library(tweetrmd)
 
-# this is surprisingly useful
-# idea from https://www.r-bloggers.com/2018/07/the-notin-operator/
-`%notin%` <- Negate(`%in%`) 
-
 # set global options for all chunks
 knitr::opts_chunk$set(dev="ragg_png", echo = FALSE)
 
@@ -93,8 +89,8 @@ test_data_starting_sept13 <- read_excel("data/TexasCOVID-19CumulativeTestsbyCoun
                             range = cellranger::cell_rows(2:258))
 
 # hospitalization data
-download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
-              "data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+download.file("https://www.dshs.state.tx.us/coronavirus/CombinedHospitalDataoverTimebyTSA.xlsx",
+              "data/CombinedHospitalDataoverTimebyTSA.xlsx",
               mode = "wb")
 
 # Starting December 2, DSHS duplicated the last day's columns
@@ -113,31 +109,47 @@ removeRedundantColumns <- function(tibbleToFix) {
     select(-ends_with(c(".y", ".x")))
 }
 
+#' as of 2020-12-22, the hospitalization data has bad column
+#' names for a few columns
+fixBadColumnNames <- function(tibbleToFix) {
+  tibbleToFix <- tibbleToFix %>%
+    rename_with(~ gsub("44051", "2020-08-08", .x, fixed = TRUE))
+  tibbleToFix <- tibbleToFix %>%
+    rename_with(~ gsub("39668", "2020-08-08", .x, fixed = TRUE))
+  tibbleToFix <- tibbleToFix %>%
+    rename_with(~ gsub("44059", "2020-08-16", .x, fixed = TRUE))
+}
 
-all_covid_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+
+all_covid_hospitalization_data <- read_excel("data/CombinedHospitalDataoverTimebyTSA.xlsx",
                             range = cellranger::cell_rows(3:25),
                             sheet = "COVID-19 Hospitalizations") %>%
-  removeRedundantColumns()
+  removeRedundantColumns() %>%
+  fixBadColumnNames()
 
-icu_covid_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+icu_covid_hospitalization_data <- read_excel("data/CombinedHospitalDataoverTimebyTSA.xlsx",
                             range = cellranger::cell_rows(3:25),
                             sheet = "COVID-19 ICU") %>%
-  removeRedundantColumns()
+  removeRedundantColumns() %>%
+  fixBadColumnNames()
 
-all_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+all_hospitalization_data <- read_excel("data/CombinedHospitalDataoverTimebyTSA.xlsx",
                             range = cellranger::cell_rows(3:25),
                             sheet = "Total Occupied Beds") %>%
-  removeRedundantColumns()
+  removeRedundantColumns() %>%
+  fixBadColumnNames()
 
-icu_hospitalization_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+icu_hospitalization_data <- read_excel("data/CombinedHospitalDataoverTimebyTSA.xlsx",
                             range = cellranger::cell_rows(3:25),
                             sheet = "ICU Beds Occupied") %>%
-  removeRedundantColumns()
+  removeRedundantColumns() %>%
+  fixBadColumnNames()
 
-hospital_capacity_data <- read_excel("data/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx",
+hospital_capacity_data <- read_excel("data/CombinedHospitalDataoverTimebyTSA.xlsx",
                             range = cellranger::cell_rows(3:25),
                             sheet = "Total Hospital Capacity") %>%
-  removeRedundantColumns()
+  removeRedundantColumns() %>%
+  fixBadColumnNames()
 
 # data derived from https://txcip.org/tac/census/hospitals.php?FIPS=48113
 hospital_data <- read_excel("data/Hospitals by county.xlsx") %>%
@@ -1015,7 +1027,7 @@ Dallas collects its data per Dallas Mayor Eric Johnson's [March 30, 2020 emergen
 
 An interesting finding is that the number of available ICU rooms has been far higher than what some panicked media headlines have suggested. For example, on Nov. 10, a Dallas Morning News headline screamed "[Dallas County has 52 ICU hospital beds available as coronavirus cases climb](https://www.dallasnews.com/news/public-health/2020/11/10/dallas-county-has-52-icu-hospital-beds-available-as-coronavirus-cases-climb/)". In fact, Dallas alone had 213 available rooms. That count doesn't include some hospitals that are in Dallas County but not Dallas. (There are no hospitals in the parts of Dallas outside Dallas County.)
 
-The best numbers for COVID-19-related hospital utilization come from the Texas Department of State Health Services's [Texas COVID-19 Data page](https://www.dshs.state.tx.us/coronavirus/additionaldata/). On that page is a spreadsheet named [COVID-19 Hospitalizations over Time by Trauma Service Area (TSA)](https://www.dshs.state.tx.us/coronavirus/TexasCOVID-19HospitalizationsOverTimebyTSA.xlsx), which gives daily COVID-19-related hospitalization counts for [trauma service areas](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm). Unfortunately, that means the finest-grained resolution for Dallas is an eighteen-county region.
+The best numbers for COVID-19-related hospital utilization come from the Texas Department of State Health Services's [Texas COVID-19 Data page](https://www.dshs.state.tx.us/coronavirus/additionaldata/). On that page is a spreadsheet named [COVID-19 Hospitalizations over Time by Trauma Service Area (TSA)](https://www.dshs.state.tx.us/coronavirus/CombinedHospitalDataoverTimebyTSA.xlsx), which gives daily COVID-19-related hospitalization counts for [trauma service areas](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm). Unfortunately, that means the finest-grained resolution for Dallas is an eighteen-county region.
 
 On June 15, Dallas County Judge Clay Jenkins posted on Twitter that Dallas County had 400 COVID-19-related hospitalizations: ![Clay Jenkins tweet](Jenkins_tweet.png)
 
