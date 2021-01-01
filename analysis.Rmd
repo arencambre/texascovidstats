@@ -24,11 +24,17 @@ library(tweetrmd)
 # set global options for all chunks
 knitr::opts_chunk$set(dev="ragg_png", echo = FALSE)
 
+# YAML params stopped working on 2020-12-31, so this
+# is a kludgy workaround
+params <- list(produced_by = "produced by Aren Cambre")
+
 ```
 
 *This page last updated on `r now()`.*
 
 **Ideas? Errors? [Leave a comment!](#comments)** All code published at https://github.com/arencambre/texascovidstats.
+
+**Temporarily, some plots are missing or inaccurate.** The data from the state does not include the year, so the script is having a hard time discerning 2020 data from 2021 data. I will wait until new data is published with 2021 dates before I decide how to fix. More info at https://github.com/arencambre/texascovidstats/issues/5.
 
 COVID is real and serious. The best path for stopping COVID-19 is:
 
@@ -96,8 +102,7 @@ download.file("https://www.dshs.state.tx.us/coronavirus/CombinedHospitalDataover
 # Starting December 2, DSHS duplicated the last day's columns
 # into four columns, suffixing the column name with .x, .y, .x.x, and .yy.
 # The following two functions clean this up.
-
-# This anticipates a vector of characters where each string may end
+# This funcion anticipates a vector of characters where each string may end
 # with .x. It simply removes the .x from the end of the strings.
 renameSelectedColumns <- function(vectorOfNames) {
   vectorOfNames %>% str_replace_all("(.*)\\.x", "\\1")
@@ -614,6 +619,65 @@ comprehensive_hospitalization_data_long %>%
        caption = "red line is 15%; data from Texas DSHS") +
   xlab("date") +
   ylab("percent")
+
+```
+This plot shows the percent of each TSA region's hospital beds that are used by COVID-positive patients. The bars are red if they exceed the governor's 15% limit.
+```{r percent of bed utilization by COVID patients by TSA region, message=FALSE, warning=FALSE}
+# just calculate the current percent COVID utilization of beds for each TSA region
+percent_COVID_utilization_by_TSA_region <-
+  comprehensive_hospitalization_data_long %>%
+  group_by(`TSA ID`, `TSA AREA`, type) %>%
+  summarize(latest_count = last(value)) %>%
+  pivot_wider(names_from = type, values_from = latest_count) %>%
+  mutate(`% bed utilization by COVID-19 patients` = `all COVID-19 hospitalizations` /
+           `total beds` * 100) %>%
+  select(`TSA ID`, `TSA AREA`, `% bed utilization by COVID-19 patients`) %>%
+  mutate(name = factor(paste(`TSA ID`, `TSA AREA`)))
+
+# now figure out the linear trend
+
+trend_days <- 14 # the number of days in the linear trend
+
+line_slopes <- comprehensive_hospitalization_data_long %>%
+  filter(type == "all COVID-19 hospitalizations") %>%
+  group_by(`TSA ID`) %>%
+  slice_max(date, n = trend_days) %>%
+  arrange(date) %>% # needed to assure correct sign on slope coefficient
+  mutate(row_number = row_number()) %>%
+  summarize(
+    slope = lm(value ~ row_number)$coefficients['row_number'] /
+      mean(value),
+    slope = round(slope * 100, digits = 1)
+  )
+
+percent_COVID_utilization_by_TSA_region <- left_join(percent_COVID_utilization_by_TSA_region, line_slopes)
+
+percent_COVID_utilization_by_TSA_region$indicator <- santoku::chop(percent_COVID_utilization_by_TSA_region$slope,
+                                                                   c(-1,0,1),
+                                                                   labels = c("🡻🡻", "🡻", "🡹", "🡹🡹"))
+
+percent_COVID_utilization_by_TSA_region$color <- ifelse(percent_COVID_utilization_by_TSA_region$`% bed utilization by COVID-19 patients` >= 15,
+                                                        "red",
+                                                        "black")
+
+percent_COVID_utilization_by_TSA_region %>%
+  ggplot(aes(x = `% bed utilization by COVID-19 patients`, y = fct_rev(name))) +
+  geom_vline(xintercept = 15, color = "red", size = 1.5) +
+  geom_col(aes(fill = `color`)) +
+  scale_fill_identity() +
+  # geom_text(aes(label = indicator, color = indicator),
+  #           nudge_y = .4,
+  #           nudge_x = .15,
+  #           fontface = "bold",
+  #           size = 6,
+  #           hjust = 0) +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("seagreen2", "seagreen4", "firebrick1", "firebrick4")) +
+  ylab("Texas hospital region") +
+  labs(title = "Texas % beds used by COVID patients, by TSA region",
+     subtitle = params$produced_by,
+     caption = "red line is 15%; data from Texas DSHS")
+
 
 ```
 
