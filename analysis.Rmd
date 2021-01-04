@@ -34,8 +34,6 @@ params <- list(produced_by = "produced by Aren Cambre")
 
 **Ideas? Errors? [Leave a comment!](#comments)** All code published at https://github.com/arencambre/texascovidstats.
 
-**Temporarily, some plots are missing or inaccurate.** The data from the state does not include the year, so the script is having a hard time discerning 2020 data from 2021 data. I will wait until new data is published with 2021 dates before I decide how to fix. More info at https://github.com/arencambre/texascovidstats/issues/5.
-
 COVID is real and serious. The best path for stopping COVID-19 is:
 
 - only consider evidence-justified measures
@@ -59,12 +57,6 @@ download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID19DailyCountyF
 
 fatality_data <- read_excel("data/TexasCOVID19DailyCountyFatalityCountData.xlsx",
                             range = cellranger::cell_rows(3:258))
-
-# below problem reported to DSHS on 2020-12-12
-# the columns before and after this are 11-29 and 12-1, so erroneous header
-if (names(fatality_data)[270] == "Fatalities 12-30") {
-  names(fatality_data)[270] = "Fatalities 11-30"
-}
 
 # case data
 download.file("https://www.dshs.state.tx.us/coronavirus/TexasCOVID19DailyCountyCaseCountData.xlsx",
@@ -171,13 +163,31 @@ hospital_data <- read_excel("data/Hospitals by county.xlsx") %>%
   select(-a)
 
 # remove cruft from column names of certain tibbles
-names(case_data) <- str_remove(names(case_data), "Cases[ \\n\\r]+0")
+names(case_data) <- str_remove(names(case_data), "Cases ")
 names(fatality_data) <- str_remove(names(fatality_data), "Fatalities ")
 names(test_data_through_sept12) <- str_remove(names(test_data_through_sept12), "Tests Through ")
+
+# further fixes to certain column names: convert written-out dates to yyyy-mm-dd
+
+# May 5 has an asterisk after the name, so have to fix that before I go further
+names(test_data_through_sept12) <- str_remove(names(test_data_through_sept12), "\\*")
+
+names(test_data_through_sept12) <- if_else(str_detect(names(test_data_through_sept12), "\\d"), # detect if the name has a number in it
+                                           # the next line has to be a character because the false condition also spits out a character
+                                           as.character(as_date(paste0(names(test_data_through_sept12), ", 2020"), format = "%B %e, %Y")), # it has a number, so it's a date
+                                           names(test_data_through_sept12)) # no number, so leave it alone
+
 names(test_data_starting_sept13) <- if_else(str_detect(names(test_data_starting_sept13), "^[:alpha:]+$"),
                                             names(test_data_starting_sept13),
                                             as.Date(as.numeric(names(test_data_starting_sept13)), origin = "1899-12-30") %>%
-                                              format("%B %e"))
+                                              format("%Y-%m-%d"))
+
+# columns 2 - 301 are 2020 dates
+names(fatality_data)[2:301] <- paste0("2020-", names(fatality_data)[2:301])
+names(case_data)[2:301] <- paste0("2020-", names(case_data)[2:301])
+# columns 302 and on are 2021 dates
+names(fatality_data)[302:dim(fatality_data)[2]] <- paste0("2021-", names(fatality_data)[302:dim(fatality_data)[2]])
+names(case_data)[302:dim(case_data)[2]] <- paste0("2021-", names(case_data)[302:dim(case_data)[2]])
 
 # linearize the data and get the daily counts
 fatality_data_long <- fatality_data %>%
@@ -185,8 +195,7 @@ fatality_data_long <- fatality_data %>%
   pivot_longer(where(is.numeric),
                names_to = "date") %>%
   group_by(county) %>%
-  mutate(date = paste0(date, "-2020"),
-         date = mdy(date),
+  mutate(date = ymd(date),
          count = value - lag(value),
          week = epiweek(date)) %>%
   ungroup() %>%
@@ -198,7 +207,7 @@ case_data_long <- case_data %>%
   rename(county = `County Name`) %>%
   group_by(county) %>%
   mutate(`cases` = value - lag(value),
-         date = mdy(paste0(date,"-2020")),
+         date = ymd(date),
          week = epiweek(date)) %>%
   rename(`cumulative cases` = value) %>%
   drop_na() %>%
@@ -212,11 +221,11 @@ test_data <- bind_cols(test_data_through_sept12,
 
 test_data_long <- test_data %>%
   rename(county = County) %>%
-  select(-`May 5*`, -`May 23`, -`June 10`) %>% # no tests on these dates for some reason
-  pivot_longer(contains(" "), names_to = "date") %>%
+  select(-`2020-05-05`, -`2020-05-23`, -`2020-06-10`) %>% # no tests on these dates for some reason
+  pivot_longer(contains("-"), names_to = "date") %>%
   group_by(county) %>%
   mutate(`tests` = value - lag(value),
-         date = as_date(date, format = "%B %d"),
+         date = as_date(date, format = "%Y-%m-%d"),
          week = epiweek(date)) %>%
   rename(`cumulative tests` = value) %>%
   drop_na() %>%
