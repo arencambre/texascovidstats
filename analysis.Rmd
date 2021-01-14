@@ -28,6 +28,16 @@ knitr::opts_chunk$set(dev="ragg_png", echo = FALSE)
 # is a kludgy workaround
 params <- list(produced_by = "produced by Aren Cambre")
 
+# Creates CDC week string in yyyy-ww format, where yyyy is the year
+# and ww is the epimeological week. Dates before the first Monday of
+# a year are actually the prior year's last week, so special care is
+# needed to get it right.
+epi_week_string <- function(date_value) {
+  ifelse(epiweek(date_value) == 53 & month(date_value) == 1,
+         paste0(year(date_value) - 1,"-",epiweek(date_value)),
+         paste0(year(date_value),"-",epiweek(date_value)))
+}
+
 ```
 
 *This page last updated on `r now()`.*
@@ -197,7 +207,7 @@ fatality_data_long <- fatality_data %>%
   group_by(county) %>%
   mutate(date = ymd(date),
          count = value - lag(value),
-         week = epiweek(date)) %>%
+         week = epi_week_string(date)) %>%
   ungroup() %>%
   drop_na()
 
@@ -208,7 +218,7 @@ case_data_long <- case_data %>%
   group_by(county) %>%
   mutate(`cases` = value - lag(value),
          date = ymd(date),
-         week = epiweek(date)) %>%
+         week = epi_week_string(date)) %>%
   rename(`cumulative cases` = value) %>%
   drop_na() %>%
   ungroup() %>%
@@ -226,7 +236,7 @@ test_data_long <- test_data %>%
   group_by(county) %>%
   mutate(`tests` = value - lag(value),
          date = as_date(date, format = "%Y-%m-%d"),
-         week = epiweek(date)) %>%
+         week = epi_week_string(date)) %>%
   rename(`cumulative tests` = value) %>%
   drop_na() %>%
   ungroup() %>%
@@ -240,13 +250,12 @@ longify_hospitalization_data <- function(raw_data) {
                names_to = "date") %>%
   group_by(`TSA AREA`) %>%
   mutate(date = ymd(date),
-         week = epiweek(date),
+         week = epi_week_string(date),
          week = factor(week),
          change_over_prior_day = value - lag(value),
          percent_change_over_prior_day = change_over_prior_day / lag(value)) %>%
   ungroup()
 }
-
 
 all_hospitalization_data_long <- longify_hospitalization_data(all_hospitalization_data)
 icu_hospitalization_data_long <- longify_hospitalization_data(icu_hospitalization_data)
@@ -259,7 +268,7 @@ hospital_capacity_data_long <- hospital_capacity_data %>%
                names_to = "date") %>%
   group_by(`TSA AREA`) %>%
   mutate(date = ymd(date),
-         week = epiweek(date),
+         week = epi_week_string(date),
          week = factor(week)) %>%
   ungroup()
 
@@ -291,7 +300,7 @@ dallas_data <- dallas_data_raw %>%
 
 # this should be used by charts showing weekly trends to exclude the
 # current, incomplete week
-current_week_number = epiweek(today())
+current_week_number = epi_week_string(now())
 
 endOfPriorWeek <- function() {
   days <- c(-1:-7)
@@ -437,6 +446,29 @@ comprehensive_hospitalization_data_long %>%
     coord_cartesian(ylim = c(0, 1800))
 ```
 
+```{r Texas COVID-19-related hospitalizations TSA region Q, fig.width=9}
+
+comprehensive_hospitalization_data_long %>%
+  filter(type != "ICU hospitalizations",
+         `TSA ID` == 'Q.',
+         date != mdy("08-08-2020")) %>%
+  # the next two dates have extreme errors in all hospitalizations
+  filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
+                                                date == ymd("2020-07-26")))) %>%
+  # the next line would cause the plot to only show total hospitalizations
+  # filter(type == "all hospitalizations") %>%
+  group_by(date, type) %>%
+  summarize(value = sum(value), .groups = "drop") %>%
+  ggplot(aes(x = date, y = value, fill = type)) +
+  geom_area(position = "identity") +
+  labs(title = "Houston-area hospitalizations during the COVID-19 pandemic (TSA region Q)",
+       subtitle = params$produced_by,
+       caption = "data from Texas DSHS") +
+  xlab("date") +
+  ylab("count") # +
+   # coord_cartesian(ylim = c(0, 1800))
+```
+
 ```{r Texas COVID-19-related hospitalizations TSA region E, fig.width=9}
 
 comprehensive_hospitalization_data_long %>%
@@ -527,8 +559,8 @@ comprehensive_hospitalization_data_long %>%
        subtitle = params$produced_by,
        caption = "data from Texas DSHS") +
   xlab("CDC week") +
-  ylab("hospitalization count")
-
+  ylab("hospitalization count") +
+  theme(axis.text.x = element_text(angle = 90))
 ```
 
 
@@ -712,9 +744,10 @@ fatality_data_long %>%
 #  geom_smooth() +
   labs(title = "Dallas County COVID-19 fatalities by week",
        subtitle = params$produced_by,
-       caption = paste0("Data from Texas DSHS. Week ", current_week_number - 1, " ends ", end_of_prior_week, ".")) +
+       caption = paste0("Data from Texas DSHS.")) +
   xlab("CDC week") +
-  ylab("fatality count")
+  ylab("fatality count") +
+  theme(axis.text.x = element_text(angle = 90))
 
 ```
 
