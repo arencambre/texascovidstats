@@ -192,20 +192,13 @@ names(test_data_starting_sept13) <- if_else(str_detect(names(test_data_starting_
                                             as.Date(as.numeric(names(test_data_starting_sept13)), origin = "1899-12-30") %>%
                                               format("%Y-%m-%d"))
 
-# columns 2 - 301 are 2020 dates
-names(fatality_data)[2:301] <- paste0("2020-", names(fatality_data)[2:301])
-names(case_data)[2:301] <- paste0("2020-", names(case_data)[2:301])
-# columns 302 and on are 2021 dates
-names(fatality_data)[302:dim(fatality_data)[2]] <- paste0("2021-", names(fatality_data)[302:dim(fatality_data)[2]])
-names(case_data)[302:dim(case_data)[2]] <- paste0("2021-", names(case_data)[302:dim(case_data)[2]])
-
 # linearize the data and get the daily counts
 fatality_data_long <- fatality_data %>%
   rename(county = `County Name`) %>%
   pivot_longer(where(is.numeric),
                names_to = "date") %>%
   group_by(county) %>%
-  mutate(date = ymd(date),
+  mutate(date = mdy(date),
          count = value - lag(value),
          week = epi_week_string(date)) %>%
   ungroup() %>%
@@ -217,7 +210,7 @@ case_data_long <- case_data %>%
   rename(county = `County Name`) %>%
   group_by(county) %>%
   mutate(`cases` = value - lag(value),
-         date = ymd(date),
+         date = mdy(date),
          week = epi_week_string(date)) %>%
   rename(`cumulative cases` = value) %>%
   drop_na() %>%
@@ -398,7 +391,8 @@ comprehensive_hospitalization_data_long %>%
        subtitle = params$produced_by,
        caption = "data from Texas DSHS") +
   xlab("date") +
-  ylab("count")
+  ylab("count") +
+  coord_cartesian(ylim = c(0, 4200))
 ```
 
 ```{r Texas COVID-19-related hospitalizations TSA region I, fig.width=9}
@@ -443,7 +437,7 @@ comprehensive_hospitalization_data_long %>%
        caption = "data from Texas DSHS") +
   xlab("date") +
   ylab("count") +
-    coord_cartesian(ylim = c(0, 1800))
+  coord_cartesian(ylim = c(0, 1800))
 ```
 
 ```{r Texas COVID-19-related hospitalizations TSA region Q, fig.width=9}
@@ -465,8 +459,8 @@ comprehensive_hospitalization_data_long %>%
        subtitle = params$produced_by,
        caption = "data from Texas DSHS") +
   xlab("date") +
-  ylab("count") # +
-   # coord_cartesian(ylim = c(0, 1800))
+  ylab("count") +
+  coord_cartesian(ylim = c(0, 16000))
 ```
 
 ```{r Texas COVID-19-related hospitalizations TSA region E, fig.width=9}
@@ -579,7 +573,8 @@ comprehensive_hospitalization_data_long %>%
        caption = "red line is 7-day rolling average; data from Texas DSHS") +
   xlab("date") +
   ylab("% change, day over day") +
-  theme_light()
+  theme_light() +
+  coord_cartesian(ylim = c(-10, 10))
 
 ```
 Here's the percent of all available hospital beds that have COVID-positive patients. Per Governor Abbott's executive order [EA-32](https://www.dshs.texas.gov/ga32/), if this exceeds 15% for seven days in a row, that tightens up COVID-prevention measures.
@@ -818,7 +813,7 @@ aggregated_case_data %>%
        caption = "data from https://www.dshs.state.tx.us/coronavirus/additionaldata/") +
   xlab("date") +
   ylab("count") +
-  coord_cartesian(ylim = c(0, 250000))
+  coord_cartesian(ylim = c(0, 350000))
 
 ```
 
@@ -842,7 +837,7 @@ aggregated_case_data %>%
   labs(title = "Texas's % of positive COVID-19 tests, by day",
        subtitle = params$produced_by,
        caption = "trend line based on 7 day rolling averages; data from Texas DSHS") +
-  coord_cartesian(ylim = c(0, 30)) +
+  coord_cartesian(ylim = c(0, 25)) +
   xlab("date") +
   ylab("percent of positive tests")
 ```
@@ -861,7 +856,7 @@ case_data_long %>%
        caption = "trend line based on 7 day rolling averages; data from Texas DSHS") +
   xlab("date") +
   ylab("count") +
-  coord_cartesian(ylim = c(0, 15000))
+  coord_cartesian(ylim = c(0, 18000))
 
 ```
 
@@ -879,7 +874,7 @@ case_data_long %>%
        caption = "trend line based on 7 day rolling averages; data from Texas DSHS") +
   xlab("date") +
   ylab("count") +
-  coord_cartesian(ylim = c(0, 1900)) +
+  coord_cartesian(ylim = c(0, 3000)) +
   theme(legend.position = "none")
 ```
 
