@@ -4,16 +4,17 @@ output: html_notebook
 ---
 
 ```{r utility, message=FALSE}
-library(osmdata)
+library(sf)
+library(tidyverse)
 ```
 
 Get a bounding box that is a polygon of Texas. Because Texas is a large state and has a lot of undulations in its borders, this may be a large query.
 ```{r}
-bbx <- getbb("Texas, United States of America", format_out = "polygon")
-x <- opq(bbox = "Texas, United States of America") %>%
-  add_osm_feature(key = "boundary",
-                  value = "administrative") %>%
-  add_osm_feature(key = "admin_level",
-                  value = "6") %>%
-  osmdata_sf()
+texas_counties <- st_read("gis/Texas_County_Boundaries-shp/County.shp")
+
+texas_counties %>%
+  ggplot() +
+  geom_sf() +
+  coord_sf(crs = "NAD83", datum = "NAD83")
+
 ```

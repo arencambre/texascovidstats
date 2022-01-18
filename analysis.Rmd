@@ -1,5 +1,6 @@
 ---
 title: "COVID-19 stats for Dallas and Texas"
+# these are my parameters
 params:
   use_cache: TRUE
   produced_by: "produced by Aren Cambre"
@@ -29,13 +30,13 @@ knitr::opts_chunk$set(dev="ragg_png", echo = FALSE)
 params <- list(produced_by = "produced by Aren Cambre")
 
 # Creates CDC week string in yyyy-ww format, where yyyy is the year
-# and ww is the epimeological week. Dates before the first Monday of
+# and ww is the epidemiological week. Dates before the first Monday of
 # a year are actually the prior year's last week, so special care is
 # needed to get it right.
 epi_week_string <- function(date_value) {
   ifelse(epiweek(date_value) == 53 & month(date_value) == 1,
-         paste0(year(date_value) - 1,"-",epiweek(date_value)),
-         paste0(year(date_value),"-",epiweek(date_value)))
+         paste0(year(date_value) - 1,"-", numform::f_pad_zero(epiweek(date_value), width = 2)),
+         paste0(year(date_value),"-",numform::f_pad_zero(epiweek(date_value), width = 2)))
 }
 
 ```
@@ -136,7 +137,7 @@ all_covid_hospitalization_data <- read_excel("data/CombinedHospitalDataoverTimeb
 
 icu_covid_hospitalization_data <- read_excel("data/CombinedHospitalDataoverTimebyTSA.xlsx",
                             range = cellranger::cell_rows(3:25),
-                            sheet = "COVID-19 ICU") %>%
+                            sheet = "Adult COVID-19 ICU") %>%
   removeRedundantColumns() %>%
   fixBadColumnNames()
 
@@ -189,7 +190,8 @@ names(test_data_through_sept12) <- if_else(str_detect(names(test_data_through_se
 
 names(test_data_starting_sept13) <- if_else(str_detect(names(test_data_starting_sept13), "^[:alpha:]+$"),
                                             names(test_data_starting_sept13),
-                                            as.Date(as.numeric(names(test_data_starting_sept13)), origin = "1899-12-30") %>%
+#                                            as.Date(as.numeric(names(test_data_starting_sept13)), origin = "1899-12-30"
+                                            ymd(names(test_data_starting_sept13))  %>%
                                               format("%Y-%m-%d"))
 
 # linearize the data and get the daily counts
@@ -374,11 +376,11 @@ My selection of areas is arbitrary, based on my interest. This section is curren
 
 "TSA" below refers to Texas's Trauma Service Areas ([more info](https://www.dshs.texas.gov/emstraumasystems/etrarac.shtm)). TSAs are the finest granularity that DSHS publishes on hospitalization data. Below are separate plots specifically about Dallas. Those plots use data collected directly by Dallas, and they paint a different story for ICU beds than the state data.
 
-```{r Texas COVID-19-related hospitalizations TSA regions T V, fig.width=9}
+```{r Texas COVID-19-related hospitalizations TSA region T, fig.width=9}
 
 comprehensive_hospitalization_data_long %>%
   filter(type != "ICU hospitalizations",
-         `TSA ID` %in% c('T.', 'V.'),
+         `TSA ID` == 'T.',
          date != mdy("08-08-2020")) %>%
   # the next two dates have extreme errors in all hospitalizations
   filter(!(type == "all hospitalizations" & (date == ymd("2020-07-23") |
@@ -387,12 +389,12 @@ comprehensive_hospitalization_data_long %>%
   summarize(value = sum(value), .groups = "drop") %>%
   ggplot(aes(x = date, y = value, fill = type)) +
   geom_area(position = "identity") +
-  labs(title = "South Texas's border-area hospitalizations during the COVID-19 pandemic (TSA regions T and V)",
+  labs(title = "Laredo-area hospitalizations during the COVID-19 pandemic (TSA regions T and V)",
        subtitle = params$produced_by,
        caption = "data from Texas DSHS") +
   xlab("date") +
   ylab("count") +
-  coord_cartesian(ylim = c(0, 4200))
+  coord_cartesian(ylim = c(0, 550))
 ```
 
 ```{r Texas COVID-19-related hospitalizations TSA region I, fig.width=9}
@@ -525,15 +527,21 @@ comprehensive_hospitalization_data_long %>%
 comprehensive_hospitalization_data_long %>%
   filter(`TSA AREA` == "Dallas/Ft. Worth",
          type == "all COVID-19 hospitalizations") %>%
-  ggplot(aes(x = date, y = value)) +
-  geom_area() +
+  ggplot(aes(x = date, y = value, fill = value)) +
+  geom_col() +
+  scale_fill_gradient(low="darkgreen",
+                      high="red") +
 #  geom_line(aes(y=rollmean(value, 5, na.pad = TRUE, align = "right")), color = "red", size = 3) +
   labs(title = "Dallas/Fort Worth TSA region COVID-19-related hospitalizations, by day",
        subtitle = params$produced_by,
        caption = "data from Texas DSHS") +
   xlab("date") +
   ylab("daily hospitalization count") +
-  theme_light()
+#  theme_light() +
+  scale_x_date(date_labels = "%b %y",
+               date_breaks ="1 month") +
+  theme(legend.position="none")
+
 ```
 
 This is the same data as prior, but bucketed into epidemiological weeks.
@@ -690,6 +698,7 @@ percent_COVID_utilization_by_TSA_region <- left_join(percent_COVID_utilization_b
 
 percent_COVID_utilization_by_TSA_region$indicator <- santoku::chop(percent_COVID_utilization_by_TSA_region$slope,
                                                                    c(-1,0,1),
+                                                                   extend = TRUE,
                                                                    labels = c("🡻🡻", "🡻", "🡹", "🡹🡹"))
 
 percent_COVID_utilization_by_TSA_region$color <- ifelse(percent_COVID_utilization_by_TSA_region$`% bed utilization by COVID-19 patients` >= 15,
